@@ -1,0 +1,17 @@
+rules_version = '2';
+
+// Rules ini membenarkan sesiapa yang tahu URL laman web KPI anda untuk
+// baca & tulis data KPI (tiada login diperlukan, sama macam versi Claude
+// artifact asal). Ini munasabah untuk alat dalaman kedai.
+//
+// Kalau nak lebih selamat kemudian hari (contoh: hadkan kepada rangkaian
+// WiFi kedai atau staff yang login), beritahu Claude dan boleh
+// dikemaskini.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /psi_kpi_data/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,15 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #eef1f4;
+}
+#root {
+  display: flex;
+}
+.psi-app {
+  min-height: 100vh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  flex: 1;
+}
