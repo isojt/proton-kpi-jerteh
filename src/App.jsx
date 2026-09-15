@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo } from "react";
+import * as XLSX from "xlsx";
 import {
   LayoutDashboard, ClipboardList, UserCog, Wrench, Headphones, Phone,
   Package, ShieldCheck, Plus, Trash2, Lock, Unlock, X, Loader2, Building2,
   CalendarDays, Users, Settings2, ListChecks, Target as TargetIcon,
-  Image as ImageIcon, RotateCcw, Upload
+  Image as ImageIcon, RotateCcw, Upload, Coins, FileText, FileSpreadsheet
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -26,6 +27,12 @@ const FOCUS_PRODUCTS = ["Battery", "Brake Pad", "Wiper"];
 // Official Proton logo, hotlinked from Wikimedia Commons. Kept up to date manually;
 // staff can upload a newer logo any time from the Dashboard and it takes over automatically.
 const DEFAULT_LOGO = "https://commons.wikimedia.org/wiki/Special:FilePath/Proton%20AG%20logo.svg?width=240";
+
+const COMPANY_INFO = {
+  name: "PROTON INDAH SARI OTOMOBIL SDN BHD",
+  address: "LOT 7481 & 7482, KAMPUNG PADANG LANDAK, 22000 JERTEH, TERENGGANU",
+  phone: "09-690 5681 / 012-669 3180 (WhatsApp)",
+};
 
 function defaultKpiConfig() {
   return {
@@ -125,6 +132,18 @@ function statusOf(actual, target) {
   if (pct >= 70) return { label: "Dalam progress", tone: "warn", pct };
   return { label: "Jauh dari sasaran", tone: "bad", pct };
 }
+
+/** Given a kpi (with optional incentiveTiers) and an achieved value, return the matching tier or null. */
+function matchIncentiveTier(kpi, value) {
+  const tiers = (kpi && kpi.incentiveTiers) || [];
+  for (const t of tiers) {
+    const min = t.min === "" || t.min === null || t.min === undefined ? -Infinity : Number(t.min);
+    const max = t.max === "" || t.max === null || t.max === undefined ? Infinity : Number(t.max);
+    if (!isNaN(min) && !isNaN(max) && value >= min && value <= max) return t;
+  }
+  return null;
+}
+function fmtRM(n) { return "RM " + (Math.round(Number(n) || 0)).toLocaleString("en-MY"); }
 
 /** Aggregate one kpi for a role, scoped to outlet (or null = all outlets), month, and optionally one staff member. */
 function aggregateKpi(entries, role, outlet, month, kpi, staffName) {
@@ -264,6 +283,24 @@ function IndividualRow({ name, roleLabel, outlet, actual, target, unit }) {
       <td className="num-cell">{fmt(target, unit)}</td>
       <td className="num-cell">{shortage > 0 ? fmt(shortage, unit) : "—"}</td>
       <td><Badge tone={st.tone}>{st.label}</Badge></td>
+    </tr>
+  );
+}
+
+function IndividualRowIncentive({ name, roleLabel, actual, target, unit, tier }) {
+  const st = statusOf(actual, target);
+  const shortage = Math.max((target || 0) - (actual || 0), 0);
+  return (
+    <tr>
+      <td>{name}</td>
+      <td className="muted-cell">{roleLabel}</td>
+      <td className="num-cell">{fmt(actual, unit)}</td>
+      <td className="num-cell">{fmt(target, unit)}</td>
+      <td className="num-cell">{shortage > 0 ? fmt(shortage, unit) : "—"}</td>
+      <td><Badge tone={st.tone}>{st.label}</Badge></td>
+      <td className="num-cell">
+        {tier ? <b className="num-good" title={tier.label || ""}>{fmtRM(tier.amount)}</b> : <span className="muted-cell">—</span>}
+      </td>
     </tr>
   );
 }
@@ -452,6 +489,24 @@ function RoleTab({ roleKey, kpiConfig, outlets, currentOutlet, staffList, entrie
               <button className="btn-primary" onClick={handleSave}>Simpan Kemaskini</button>
               {saveMsg && <span className="save-msg">{saveMsg}</span>}
             </div>
+
+            {selectedStaff && roleCfg.kpis.some(k => (k.incentiveTiers || []).length > 0) && (
+              <div className="incentive-mini-card">
+                <span className="field-label"><Coins size={13} /> Insentif Bulan Ini — {selectedStaff}</span>
+                <div className="product-chip-row">
+                  {roleCfg.kpis.filter(k => (k.incentiveTiers || []).length > 0).map(k => {
+                    const agg = aggregateKpi(entries, roleKey, currentOutlet, month, k, selectedStaff);
+                    const tier = matchIncentiveTier(k, agg.total);
+                    return (
+                      <div key={k.key} className="product-chip">
+                        <span>{k.label}</span>
+                        <b className={tier ? "num-good" : ""}>{tier ? fmtRM(tier.amount) : "Belum capai julat"}</b>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="progress-section">
@@ -499,7 +554,7 @@ function RoleTab({ roleKey, kpiConfig, outlets, currentOutlet, staffList, entrie
                 <div className="table-wrap">
                   <table>
                     <thead>
-                      <tr><th>Nama</th><th>Jawatan</th><th>Pencapaian</th><th>Sasaran</th><th>Baki</th><th>Status</th></tr>
+                      <tr><th>Nama</th><th>Jawatan</th><th>Pencapaian</th><th>Sasaran</th><th>Baki</th><th>Status</th><th>Insentif</th></tr>
                     </thead>
                     <tbody>
                       {roleStaff.map(s => {
@@ -507,12 +562,14 @@ function RoleTab({ roleKey, kpiConfig, outlets, currentOutlet, staffList, entrie
                         plainKpis.forEach(k => {
                           const agg = aggregateKpi(entries, roleKey, currentOutlet, month, k, s.name);
                           const target = getTarget(k, currentOutlet);
-                          rows.push(<IndividualRow key={s.id + k.key} name={s.name} roleLabel={k.label} actual={agg.total} target={target} unit={k.unit} />);
+                          const tier = matchIncentiveTier(k, agg.total);
+                          rows.push(<IndividualRowIncentive key={s.id + k.key} name={s.name} roleLabel={k.label} actual={agg.total} target={target} unit={k.unit} tier={tier} />);
                         });
                         if (focusKpi) {
                           const agg = aggregateKpi(entries, roleKey, currentOutlet, month, focusKpi, s.name);
                           const target = getTarget(focusKpi, currentOutlet);
-                          rows.push(<IndividualRow key={s.id + focusKpi.key} name={s.name} roleLabel={focusKpi.label} actual={agg.total} target={target} unit={focusKpi.unit} />);
+                          const tier = matchIncentiveTier(focusKpi, agg.total);
+                          rows.push(<IndividualRowIncentive key={s.id + focusKpi.key} name={s.name} roleLabel={focusKpi.label} actual={agg.total} target={target} unit={focusKpi.unit} tier={tier} />);
                         }
                         return rows;
                       })}
@@ -574,7 +631,7 @@ function RoleTab({ roleKey, kpiConfig, outlets, currentOutlet, staffList, entrie
 /* DASHBOARD TAB                                                           */
 /* ---------------------------------------------------------------------- */
 
-function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth, addOutlet, logoUrl, onLogoChange, onLogoReset }) {
+function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth, addOutlet, logoUrl, onLogoChange, onLogoReset, pin }) {
   const monthsAvailable = useMemo(() => {
     const set = new Set([currentMonthStr()]);
     entries.forEach(e => set.add(monthOf(e.date)));
@@ -583,6 +640,7 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
 
   const [newOutlet, setNewOutlet] = useState("");
   const [outletMsg, setOutletMsg] = useState("");
+  const [reportUnlocked, setReportUnlocked] = useState(false);
 
   function handleAddOutlet() {
     const trimmed = newOutlet.trim();
@@ -592,6 +650,55 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
     setNewOutlet("");
     setOutletMsg(`Outlet "${trimmed}" ditambah.`);
     setTimeout(() => setOutletMsg(""), 2500);
+  }
+
+  function handlePrintPdf() {
+    window.print();
+  }
+
+  function handleExportExcel() {
+    const wb = XLSX.utils.book_new();
+
+    const ringkasanRows = [["KPI", "Pencapaian", "Sasaran", "Baki", "Status"]];
+    DASHBOARD_METRICS.forEach(metric => {
+      const agg = dashboardAggregate(entries, kpiConfig, metric, null, month);
+      let sum = 0, count = 0;
+      outlets.forEach(o => { sum += dashboardTarget(kpiConfig, metric, o); count++; });
+      const target = metric.aggregation === "average" && count ? sum / count : sum;
+      const st = statusOf(agg.total, target);
+      const shortage = Math.max(target - agg.total, 0);
+      ringkasanRows.push([metric.label, agg.total, target, shortage, st.label]);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ringkasanRows), "Ringkasan");
+
+    const outletRows = [["Outlet", "KPI", "Pencapaian", "Sasaran", "Baki", "Status"]];
+    outlets.forEach(o => {
+      DASHBOARD_METRICS.forEach(metric => {
+        const agg = dashboardAggregate(entries, kpiConfig, metric, o, month);
+        const target = dashboardTarget(kpiConfig, metric, o);
+        const st = statusOf(agg.total, target);
+        const shortage = Math.max(target - agg.total, 0);
+        outletRows.push([o, metric.label, agg.total, target, shortage, st.label]);
+      });
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outletRows), "Per Outlet");
+
+    const indivRows = [["Nama", "Jawatan", "Outlet", "KPI", "Pencapaian", "Sasaran", "Status", "Insentif (RM)"]];
+    ROLES.forEach(r => {
+      const cfg = kpiConfig[r.key] || { kpis: [] };
+      staffList.filter(s => s.role === r.key).forEach(s => {
+        cfg.kpis.forEach(k => {
+          const agg = aggregateKpi(entries, r.key, s.outlet, month, k, s.name);
+          const target = getTarget(k, s.outlet);
+          const st = statusOf(agg.total, target);
+          const tier = matchIncentiveTier(k, agg.total);
+          indivRows.push([s.name, r.label, s.outlet, k.label, agg.total, target, st.label, tier ? tier.amount : 0]);
+        });
+      });
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(indivRows), "Per Individu");
+
+    XLSX.writeFile(wb, `KPI-Jerteh-${month}.xlsx`);
   }
 
   function handleLogoFile(e) {
@@ -639,6 +746,18 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
           <span className="hint-text">Outlet sedia ada: {outlets.join(", ")}</span>
         </div>
       </div>
+
+      <PinGate unlocked={reportUnlocked} pin={pin} onUnlock={() => setReportUnlocked(true)} onLock={() => setReportUnlocked(false)}>
+        <div className="card report-card">
+          <h4><FileText size={16} /> Muat Turun Laporan — {monthLabel(month)}</h4>
+          <p className="hint-text">Laporan ringkasan KPI lengkap dengan logo & butiran syarikat, untuk rekod atau edaran rasmi. Akses terhad kepada Service Manager.</p>
+          <div className="row-inline">
+            <button className="btn-primary small" onClick={handlePrintPdf}><FileText size={14} /> Muat Turun PDF</button>
+            <button className="btn-ghost small" onClick={handleExportExcel}><FileSpreadsheet size={14} /> Muat Turun Excel</button>
+          </div>
+          <span className="hint-text">Untuk PDF: skrin cetak akan terbuka — pilih destinasi "Save as PDF" / "Simpan sebagai PDF".</span>
+        </div>
+      </PinGate>
 
       <Field label="Bulan">
         <select className="select" value={month} onChange={e => setMonth(e.target.value)}>
@@ -718,6 +837,98 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
           </div>
         </section>
       ))}
+
+      <div className="print-report">
+        <div className="print-header">
+          <img src={logoUrl || DEFAULT_LOGO} alt="Logo Proton" />
+          <div>
+            <h1>{COMPANY_INFO.name}</h1>
+            <p>{COMPANY_INFO.address}</p>
+            <p>Tel: {COMPANY_INFO.phone}</p>
+          </div>
+        </div>
+        <h2>Laporan Ringkasan KPI — {monthLabel(month)}</h2>
+        <p className="print-generated">Dijana pada {dateLabel(todayStr())}</p>
+
+        <h3>Ringkasan Keseluruhan Syarikat</h3>
+        <table className="print-table">
+          <thead><tr><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>Baki</th><th>Status</th></tr></thead>
+          <tbody>
+            {DASHBOARD_METRICS.map(metric => {
+              const agg = dashboardAggregate(entries, kpiConfig, metric, null, month);
+              let sum = 0, count = 0;
+              outlets.forEach(o => { sum += dashboardTarget(kpiConfig, metric, o); count++; });
+              const target = metric.aggregation === "average" && count ? sum / count : sum;
+              const st = statusOf(agg.total, target);
+              const shortage = Math.max(target - agg.total, 0);
+              return (
+                <tr key={metric.key}>
+                  <td>{metric.label}</td>
+                  <td>{fmt(agg.total, metric.unit)}</td>
+                  <td>{fmt(target, metric.unit)}</td>
+                  <td>{shortage > 0 ? fmt(shortage, metric.unit) : "Tercapai"}</td>
+                  <td>{st.label}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {outlets.map(o => (
+          <div key={o}>
+            <h3>Outlet: {o}</h3>
+            <table className="print-table">
+              <thead><tr><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>Baki</th><th>Status</th></tr></thead>
+              <tbody>
+                {DASHBOARD_METRICS.map(metric => {
+                  const agg = dashboardAggregate(entries, kpiConfig, metric, o, month);
+                  const target = dashboardTarget(kpiConfig, metric, o);
+                  const st = statusOf(agg.total, target);
+                  const shortage = Math.max(target - agg.total, 0);
+                  return (
+                    <tr key={metric.key}>
+                      <td>{metric.label}</td>
+                      <td>{fmt(agg.total, metric.unit)}</td>
+                      <td>{fmt(target, metric.unit)}</td>
+                      <td>{shortage > 0 ? fmt(shortage, metric.unit) : "Tercapai"}</td>
+                      <td>{st.label}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ))}
+
+        <h3>Pencapaian Individu</h3>
+        <table className="print-table">
+          <thead><tr><th>Nama</th><th>Jawatan</th><th>Outlet</th><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>Status</th><th>Insentif</th></tr></thead>
+          <tbody>
+            {ROLES.map(r => {
+              const cfg = kpiConfig[r.key] || { kpis: [] };
+              const rowsOut = [];
+              staffList.filter(s => s.role === r.key).forEach(s => {
+                cfg.kpis.forEach(k => {
+                  const agg = aggregateKpi(entries, r.key, s.outlet, month, k, s.name);
+                  const target = getTarget(k, s.outlet);
+                  const st = statusOf(agg.total, target);
+                  const tier = matchIncentiveTier(k, agg.total);
+                  rowsOut.push(
+                    <tr key={s.id + k.key}>
+                      <td>{s.name}</td><td>{r.label}</td><td>{s.outlet}</td><td>{k.label}</td>
+                      <td>{fmt(agg.total, k.unit)}</td><td>{fmt(target, k.unit)}</td><td>{st.label}</td>
+                      <td>{tier ? fmtRM(tier.amount) : "—"}</td>
+                    </tr>
+                  );
+                });
+              });
+              return rowsOut;
+            })}
+          </tbody>
+        </table>
+
+        <p className="print-footer">Laporan dijana secara automatik oleh Sistem KPI Staff — {COMPANY_INFO.name} ({COMPANY_INFO.address}).</p>
+      </div>
     </div>
   );
 }
@@ -768,6 +979,7 @@ function ServiceManagerTab(props) {
     { key: "input", label: "Input KPI Saya", icon: ClipboardList },
     { key: "overview", label: "Semua Progress", icon: Users },
     { key: "targets", label: "Urus Sasaran", icon: TargetIcon },
+    { key: "incentives", label: "Urus Insentif", icon: Coins },
     { key: "kpis", label: "Deskripsi Kerja (KPI)", icon: ListChecks },
     { key: "orgs", label: "Outlet & Staff", icon: Building2 },
     { key: "settings", label: "Tetapan PIN", icon: Settings2 },
@@ -890,6 +1102,12 @@ function ServiceManagerTab(props) {
         </PinGate>
       )}
 
+      {subTab === "incentives" && (
+        <PinGate unlocked={unlocked} pin={pin} onUnlock={() => setUnlocked(true)} onLock={() => setUnlocked(false)}>
+          <IncentiveEditor kpiConfig={kpiConfig} updateKpiConfig={updateKpiConfig} />
+        </PinGate>
+      )}
+
       {subTab === "kpis" && (
         <PinGate unlocked={unlocked} pin={pin} onUnlock={() => setUnlocked(true)} onLock={() => setUnlocked(false)}>
           <p className="hint-text">Tambah atau buang KPI / deskripsi kerja bagi setiap jawatan. Perubahan di sini terpakai untuk semua outlet.</p>
@@ -908,6 +1126,75 @@ function ServiceManagerTab(props) {
           <PinSettings pin={pin} updatePin={updatePin} />
         </PinGate>
       )}
+    </div>
+  );
+}
+
+function IncentiveEditor({ kpiConfig, updateKpiConfig }) {
+  function addTier(roleKey, kpiKey) {
+    const next = JSON.parse(JSON.stringify(kpiConfig));
+    const kpi = next[roleKey].kpis.find(k => k.key === kpiKey);
+    if (!kpi.incentiveTiers) kpi.incentiveTiers = [];
+    kpi.incentiveTiers.push({ id: uid(), label: "", min: "", max: "", amount: 0 });
+    updateKpiConfig(next);
+  }
+  function updateTier(roleKey, kpiKey, tierId, field, value) {
+    const next = JSON.parse(JSON.stringify(kpiConfig));
+    const kpi = next[roleKey].kpis.find(k => k.key === kpiKey);
+    const tier = (kpi.incentiveTiers || []).find(t => t.id === tierId);
+    if (tier) tier[field] = field === "amount" ? Number(value) || 0 : value;
+    updateKpiConfig(next);
+  }
+  function removeTier(roleKey, kpiKey, tierId) {
+    const next = JSON.parse(JSON.stringify(kpiConfig));
+    const kpi = next[roleKey].kpis.find(k => k.key === kpiKey);
+    kpi.incentiveTiers = (kpi.incentiveTiers || []).filter(t => t.id !== tierId);
+    updateKpiConfig(next);
+  }
+
+  return (
+    <div>
+      <p className="hint-text">
+        Tetapkan insentif (RM) mengikut julat pencapaian bulanan bagi setiap KPI. Contoh: Stockholding - Fast Moving
+        boleh ada julat "0.5–1 bulan → RM50" dan "bawah 0.5 bulan → RM150". Staff hanya keyin data harian seperti biasa —
+        insentif dikira dan dipaparkan secara automatik berdasarkan julat yang ditetapkan di sini.
+        Biarkan Minimum/Maksimum kosong bermaksud "tiada had" pada arah tersebut.
+      </p>
+      {ROLES.map(r => {
+        const cfg = kpiConfig[r.key] || { kpis: [] };
+        if (cfg.kpis.length === 0) return null;
+        return (
+          <div className="card" key={r.key}>
+            <h4><r.icon size={16} /> {r.label}</h4>
+            {cfg.kpis.map(k => (
+              <div key={k.key} className="incentive-kpi-block">
+                <div className="incentive-kpi-head">{k.label} <span className="muted-cell">({k.unit})</span></div>
+                {(k.incentiveTiers || []).length === 0 ? (
+                  <div className="empty-box small">Belum ada julat insentif ditetapkan untuk KPI ini.</div>
+                ) : (
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr><th>Label</th><th>Minimum</th><th>Maksimum</th><th>Insentif (RM)</th><th></th></tr></thead>
+                      <tbody>
+                        {k.incentiveTiers.map(t => (
+                          <tr key={t.id}>
+                            <td><input className="input" value={t.label} placeholder="cth: Bawah 0.5 bulan" onChange={e => updateTier(r.key, k.key, t.id, "label", e.target.value)} /></td>
+                            <td><input className="input target-input" type="number" step="any" value={t.min} placeholder="tiada had" onChange={e => updateTier(r.key, k.key, t.id, "min", e.target.value)} /></td>
+                            <td><input className="input target-input" type="number" step="any" value={t.max} placeholder="tiada had" onChange={e => updateTier(r.key, k.key, t.id, "max", e.target.value)} /></td>
+                            <td><input className="input target-input" type="number" step="any" min="0" value={t.amount} onChange={e => updateTier(r.key, k.key, t.id, "amount", e.target.value)} /></td>
+                            <td><button className="icon-btn" onClick={() => removeTier(r.key, k.key, t.id)}><Trash2 size={14} /></button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <button className="btn-ghost small" onClick={() => addTier(r.key, k.key)}><Plus size={14} /> Tambah Julat</button>
+              </div>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1191,7 +1478,7 @@ export default function ProtonKpiApp() {
           {activeTab === "dashboard" && (
             <DashboardTab
               kpiConfig={kpiConfig} outlets={outlets} staffList={staffList} entries={entries} month={month} setMonth={setMonth}
-              addOutlet={addOutlet} logoUrl={logoUrl} onLogoChange={updateLogo} onLogoReset={resetLogo}
+              addOutlet={addOutlet} logoUrl={logoUrl} onLogoChange={updateLogo} onLogoReset={resetLogo} pin={pin}
             />
           )}
           {activeTab === "service_manager" && (
@@ -1402,7 +1689,31 @@ tbody td { padding: 7px 8px; border-bottom: 1px solid #eef1f4; }
 .metric-section { display: flex; flex-direction: column; gap: 10px; }
 .metric-section h3 { font-family: 'Oswald', sans-serif; font-size: 15.5px; margin: 6px 0 0; font-weight: 600; }
 
-.subtab-strip { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.report-card { gap: 10px; }
+
+.print-report { display: none; }
+@media print {
+  body * { visibility: hidden; }
+  .print-report, .print-report * { visibility: visible; }
+  .print-report { display: block !important; position: absolute; top: 0; left: 0; width: 100%; padding: 20px; }
+  .print-header { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+  .print-header img { width: 64px; height: 64px; object-fit: contain; }
+  .print-header h1 { font-size: 15px; margin: 0 0 2px; }
+  .print-header p { font-size: 11px; margin: 0; color: #333; }
+  .print-report h2 { font-size: 14px; margin: 10px 0 2px; }
+  .print-report h3 { font-size: 12.5px; margin: 14px 0 4px; }
+  .print-generated { font-size: 10.5px; color: #555; margin: 0 0 6px; }
+  .print-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+  .print-table th, .print-table td { border: 1px solid #999; padding: 3px 6px; font-size: 10px; text-align: left; }
+  .print-footer { font-size: 9.5px; color: #777; margin-top: 16px; }
+}
+
+.incentive-kpi-block { border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.incentive-kpi-block:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+.incentive-kpi-head { font-weight: 600; font-size: 12.5px; }
+.empty-box.small { padding: 8px 10px; font-size: 12px; }
+.incentive-mini-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.incentive-mini-card .field-label { display: flex; align-items: center; gap: 5px; }
 .subtab-btn {
   display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: #fff;
   padding: 7px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); cursor: pointer;
