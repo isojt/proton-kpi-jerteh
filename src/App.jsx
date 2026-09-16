@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useMemo } from "react";
-import * as XLSX from "xlsx";
 import {
   LayoutDashboard, ClipboardList, UserCog, Wrench, Headphones, Phone,
   Package, ShieldCheck, Plus, Trash2, Lock, Unlock, X, Loader2, Building2,
   CalendarDays, Users, Settings2, ListChecks, Target as TargetIcon,
-  Image as ImageIcon, RotateCcw, Upload, Coins, FileText, FileSpreadsheet
+  Image as ImageIcon, RotateCcw, Upload, Coins, FileText
 } from "lucide-react";
 
 /* ---------------------------------------------------------------------- */
@@ -92,6 +91,11 @@ const DASHBOARD_METRICS = [
   { key: "csi", label: "CSI", roles: ["service_manager", "service_advisor", "technician", "cre"], unit: "%", aggregation: "average" },
   { key: "focus_product", label: "Focus Product", roles: ["service_advisor", "technician"], unit: "unit", aggregation: "sum", hasSubcategory: true, subcategories: [...FOCUS_PRODUCTS] },
 ];
+
+// These KPI keys share ONE target per outlet across every role that tracks them.
+// Service Manager sets it once (in "Urus Sasaran") and it applies automatically
+// to Service Manager / Service Advisor / Technician / CRE as relevant.
+const SHARED_KPI_KEYS = DASHBOARD_METRICS.map(m => m.key);
 
 /* ---------------------------------------------------------------------- */
 /* HELPERS                                                                 */
@@ -656,51 +660,6 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
     window.print();
   }
 
-  function handleExportExcel() {
-    const wb = XLSX.utils.book_new();
-
-    const ringkasanRows = [["KPI", "Pencapaian", "Sasaran", "Baki", "Status"]];
-    DASHBOARD_METRICS.forEach(metric => {
-      const agg = dashboardAggregate(entries, kpiConfig, metric, null, month);
-      let sum = 0, count = 0;
-      outlets.forEach(o => { sum += dashboardTarget(kpiConfig, metric, o); count++; });
-      const target = metric.aggregation === "average" && count ? sum / count : sum;
-      const st = statusOf(agg.total, target);
-      const shortage = Math.max(target - agg.total, 0);
-      ringkasanRows.push([metric.label, agg.total, target, shortage, st.label]);
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ringkasanRows), "Ringkasan");
-
-    const outletRows = [["Outlet", "KPI", "Pencapaian", "Sasaran", "Baki", "Status"]];
-    outlets.forEach(o => {
-      DASHBOARD_METRICS.forEach(metric => {
-        const agg = dashboardAggregate(entries, kpiConfig, metric, o, month);
-        const target = dashboardTarget(kpiConfig, metric, o);
-        const st = statusOf(agg.total, target);
-        const shortage = Math.max(target - agg.total, 0);
-        outletRows.push([o, metric.label, agg.total, target, shortage, st.label]);
-      });
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(outletRows), "Per Outlet");
-
-    const indivRows = [["Nama", "Jawatan", "Outlet", "KPI", "Pencapaian", "Sasaran", "Status", "Insentif (RM)"]];
-    ROLES.forEach(r => {
-      const cfg = kpiConfig[r.key] || { kpis: [] };
-      staffList.filter(s => s.role === r.key).forEach(s => {
-        cfg.kpis.forEach(k => {
-          const agg = aggregateKpi(entries, r.key, s.outlet, month, k, s.name);
-          const target = getTarget(k, s.outlet);
-          const st = statusOf(agg.total, target);
-          const tier = matchIncentiveTier(k, agg.total);
-          indivRows.push([s.name, r.label, s.outlet, k.label, agg.total, target, st.label, tier ? tier.amount : 0]);
-        });
-      });
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(indivRows), "Per Individu");
-
-    XLSX.writeFile(wb, `KPI-Jerteh-${month}.xlsx`);
-  }
-
   function handleLogoFile(e) {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -749,13 +708,12 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
 
       <PinGate unlocked={reportUnlocked} pin={pin} onUnlock={() => setReportUnlocked(true)} onLock={() => setReportUnlocked(false)}>
         <div className="card report-card">
-          <h4><FileText size={16} /> Muat Turun Laporan — {monthLabel(month)}</h4>
-          <p className="hint-text">Laporan ringkasan KPI lengkap dengan logo & butiran syarikat, untuk rekod atau edaran rasmi. Akses terhad kepada Service Manager.</p>
+          <h4><FileText size={16} /> Muat Turun Laporan PDF — {monthLabel(month)}</h4>
+          <p className="hint-text">Laporan ringkasan KPI profesional lengkap dengan logo, alamat & no. telefon syarikat, meter peratusan, dan pecahan insentif. Akses terhad kepada Service Manager.</p>
           <div className="row-inline">
             <button className="btn-primary small" onClick={handlePrintPdf}><FileText size={14} /> Muat Turun PDF</button>
-            <button className="btn-ghost small" onClick={handleExportExcel}><FileSpreadsheet size={14} /> Muat Turun Excel</button>
           </div>
-          <span className="hint-text">Untuk PDF: skrin cetak akan terbuka — pilih destinasi "Save as PDF" / "Simpan sebagai PDF".</span>
+          <span className="hint-text">Skrin cetak akan terbuka — pilih destinasi "Save as PDF" / "Simpan sebagai PDF", dan pastikan pilihan "Background graphics" / "Grafik latar" dihidupkan untuk hasil terbaik.</span>
         </div>
       </PinGate>
 
@@ -839,70 +797,75 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
       ))}
 
       <div className="print-report">
-        <div className="print-header">
-          <img src={logoUrl || DEFAULT_LOGO} alt="Logo Proton" />
-          <div>
+        <div className="print-letterhead">
+          <img src={logoUrl || DEFAULT_LOGO} alt="Logo Proton" className="print-logo" />
+          <div className="print-company">
             <h1>{COMPANY_INFO.name}</h1>
             <p>{COMPANY_INFO.address}</p>
             <p>Tel: {COMPANY_INFO.phone}</p>
           </div>
         </div>
-        <h2>Laporan Ringkasan KPI — {monthLabel(month)}</h2>
-        <p className="print-generated">Dijana pada {dateLabel(todayStr())}</p>
 
-        <h3>Ringkasan Keseluruhan Syarikat</h3>
+        <div className="print-title-bar">
+          <div>
+            <h2>Laporan Ringkasan KPI</h2>
+            <span className="print-month">{monthLabel(month)}</span>
+          </div>
+          <span className="print-generated">Dijana: {dateLabel(todayStr())}</span>
+        </div>
+
+        <div className="print-summary-grid">
+          {DASHBOARD_METRICS.map(metric => {
+            const agg = dashboardAggregate(entries, kpiConfig, metric, null, month);
+            let sum = 0, count = 0;
+            outlets.forEach(o => { sum += dashboardTarget(kpiConfig, metric, o); count++; });
+            const target = metric.aggregation === "average" && count ? sum / count : sum;
+            const st = statusOf(agg.total, target);
+            const shortage = Math.max(target - agg.total, 0);
+            return (
+              <div className="print-summary-card" key={metric.key}>
+                <div className="print-summary-head">
+                  <span>{metric.label}</span>
+                  <span className={"print-chip print-chip-" + st.tone}>{st.label}</span>
+                </div>
+                <div className="print-summary-body">
+                  <Gauge percent={st.pct} size={92} />
+                  <div className="print-summary-figures">
+                    <div><span>Pencapaian</span><b>{fmt(agg.total, metric.unit)}</b></div>
+                    <div><span>Sasaran</span><b>{fmt(target, metric.unit)}</b></div>
+                    <div><span>Baki</span><b>{shortage > 0 ? fmt(shortage, metric.unit) : "Tercapai"}</b></div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <h3 className="print-section-title">Prestasi Mengikut Outlet</h3>
         <table className="print-table">
-          <thead><tr><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>Baki</th><th>Status</th></tr></thead>
+          <thead><tr><th>Outlet</th><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>%</th><th>Status</th></tr></thead>
           <tbody>
-            {DASHBOARD_METRICS.map(metric => {
-              const agg = dashboardAggregate(entries, kpiConfig, metric, null, month);
-              let sum = 0, count = 0;
-              outlets.forEach(o => { sum += dashboardTarget(kpiConfig, metric, o); count++; });
-              const target = metric.aggregation === "average" && count ? sum / count : sum;
+            {outlets.map(o => DASHBOARD_METRICS.map(metric => {
+              const agg = dashboardAggregate(entries, kpiConfig, metric, o, month);
+              const target = dashboardTarget(kpiConfig, metric, o);
               const st = statusOf(agg.total, target);
-              const shortage = Math.max(target - agg.total, 0);
               return (
-                <tr key={metric.key}>
+                <tr key={o + metric.key}>
+                  <td>{o}</td>
                   <td>{metric.label}</td>
                   <td>{fmt(agg.total, metric.unit)}</td>
                   <td>{fmt(target, metric.unit)}</td>
-                  <td>{shortage > 0 ? fmt(shortage, metric.unit) : "Tercapai"}</td>
-                  <td>{st.label}</td>
+                  <td>{st.pct !== null ? Math.round(st.pct) + "%" : "—"}</td>
+                  <td><span className={"print-chip print-chip-" + st.tone}>{st.label}</span></td>
                 </tr>
               );
-            })}
+            }))}
           </tbody>
         </table>
 
-        {outlets.map(o => (
-          <div key={o}>
-            <h3>Outlet: {o}</h3>
-            <table className="print-table">
-              <thead><tr><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>Baki</th><th>Status</th></tr></thead>
-              <tbody>
-                {DASHBOARD_METRICS.map(metric => {
-                  const agg = dashboardAggregate(entries, kpiConfig, metric, o, month);
-                  const target = dashboardTarget(kpiConfig, metric, o);
-                  const st = statusOf(agg.total, target);
-                  const shortage = Math.max(target - agg.total, 0);
-                  return (
-                    <tr key={metric.key}>
-                      <td>{metric.label}</td>
-                      <td>{fmt(agg.total, metric.unit)}</td>
-                      <td>{fmt(target, metric.unit)}</td>
-                      <td>{shortage > 0 ? fmt(shortage, metric.unit) : "Tercapai"}</td>
-                      <td>{st.label}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ))}
-
-        <h3>Pencapaian Individu</h3>
+        <h3 className="print-section-title">Pencapaian & Insentif Individu</h3>
         <table className="print-table">
-          <thead><tr><th>Nama</th><th>Jawatan</th><th>Outlet</th><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>Status</th><th>Insentif</th></tr></thead>
+          <thead><tr><th>Nama</th><th>Jawatan</th><th>Outlet</th><th>KPI</th><th>Pencapaian</th><th>Sasaran</th><th>%</th><th>Status</th><th>Insentif</th></tr></thead>
           <tbody>
             {ROLES.map(r => {
               const cfg = kpiConfig[r.key] || { kpis: [] };
@@ -916,8 +879,10 @@ function DashboardTab({ kpiConfig, outlets, staffList, entries, month, setMonth,
                   rowsOut.push(
                     <tr key={s.id + k.key}>
                       <td>{s.name}</td><td>{r.label}</td><td>{s.outlet}</td><td>{k.label}</td>
-                      <td>{fmt(agg.total, k.unit)}</td><td>{fmt(target, k.unit)}</td><td>{st.label}</td>
-                      <td>{tier ? fmtRM(tier.amount) : "—"}</td>
+                      <td>{fmt(agg.total, k.unit)}</td><td>{fmt(target, k.unit)}</td>
+                      <td>{st.pct !== null ? Math.round(st.pct) + "%" : "—"}</td>
+                      <td><span className={"print-chip print-chip-" + st.tone}>{st.label}</span></td>
+                      <td className={tier ? "print-incentive" : ""}>{tier ? fmtRM(tier.amount) : "—"}</td>
                     </tr>
                   );
                 });
@@ -1061,10 +1026,60 @@ function ServiceManagerTab(props) {
 
       {subTab === "targets" && (
         <PinGate unlocked={unlocked} pin={pin} onUnlock={() => setUnlocked(true)} onLock={() => setUnlocked(false)}>
-          <p className="hint-text">Tetapkan sasaran bulanan bagi setiap KPI, mengikut outlet. Sasaran ini akan digunakan untuk kira progress semua staff berkaitan.</p>
+          <p className="hint-text">
+            Sasaran <b>Throughput, Revenue, CSI</b> dan <b>Focus Product</b> ditetapkan SEKALI sahaja di bawah, dan terpakai
+            automatik untuk semua jawatan berkaitan (Service Manager, Service Advisor, Technician{" / CRE (untuk CSI)"}).
+            Sasaran KPI lain (Stockholding, Deadstock, Approval Rate, dll) ditetapkan berasingan bagi setiap jawatan.
+          </p>
+
+          <div className="card">
+            <h4><TargetIcon size={16} /> Sasaran Bersepadu (semua jawatan berkaitan)</h4>
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>KPI</th>{outlets.map(o => <th key={o}>{o}</th>)}</tr></thead>
+                <tbody>
+                  {DASHBOARD_METRICS.map(metric => (
+                    <tr key={metric.key}>
+                      <td>{metric.label} <span className="muted-cell">({metric.unit})</span></td>
+                      {outlets.map(o => {
+                        let current = 0;
+                        for (const r of metric.roles) {
+                          const kpi = kpiConfig[r] && kpiConfig[r].kpis.find(k => k.key === metric.key);
+                          if (kpi) { current = getTarget(kpi, o); break; }
+                        }
+                        return (
+                          <td key={o}>
+                            <input
+                              className="input target-input"
+                              type="number" min="0" step="any"
+                              value={current}
+                              onChange={e => {
+                                const num = Number(e.target.value) || 0;
+                                const next = JSON.parse(JSON.stringify(kpiConfig));
+                                metric.roles.forEach(r => {
+                                  const kk = next[r] && next[r].kpis.find(x => x.key === metric.key);
+                                  if (kk) {
+                                    if (!kk.targets) kk.targets = { default: 0 };
+                                    kk.targets[o] = num;
+                                  }
+                                });
+                                updateKpiConfig(next);
+                              }}
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {ROLES.map(r => {
             const cfg = kpiConfig[r.key] || { kpis: [] };
-            if (cfg.kpis.length === 0) return null;
+            const ownKpis = cfg.kpis.filter(k => !SHARED_KPI_KEYS.includes(k.key));
+            if (ownKpis.length === 0) return null;
             return (
               <div className="card" key={r.key}>
                 <h4><r.icon size={16} /> {r.label}</h4>
@@ -1072,7 +1087,7 @@ function ServiceManagerTab(props) {
                   <table>
                     <thead><tr><th>KPI</th>{outlets.map(o => <th key={o}>{o}</th>)}</tr></thead>
                     <tbody>
-                      {cfg.kpis.map(k => (
+                      {ownKpis.map(k => (
                         <tr key={k.key}>
                           <td>{k.label} <span className="muted-cell">({k.unit})</span></td>
                           {outlets.map(o => (
@@ -1693,19 +1708,49 @@ tbody td { padding: 7px 8px; border-bottom: 1px solid #eef1f4; }
 
 .print-report { display: none; }
 @media print {
+  @page { margin: 14mm; }
   body * { visibility: hidden; }
   .print-report, .print-report * { visibility: visible; }
-  .print-report { display: block !important; position: absolute; top: 0; left: 0; width: 100%; padding: 20px; }
-  .print-header { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
-  .print-header img { width: 64px; height: 64px; object-fit: contain; }
-  .print-header h1 { font-size: 15px; margin: 0 0 2px; }
-  .print-header p { font-size: 11px; margin: 0; color: #333; }
-  .print-report h2 { font-size: 14px; margin: 10px 0 2px; }
-  .print-report h3 { font-size: 12.5px; margin: 14px 0 4px; }
-  .print-generated { font-size: 10.5px; color: #555; margin: 0 0 6px; }
-  .print-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
-  .print-table th, .print-table td { border: 1px solid #999; padding: 3px 6px; font-size: 10px; text-align: left; }
-  .print-footer { font-size: 9.5px; color: #777; margin-top: 16px; }
+  .print-report {
+    display: block !important; position: absolute; top: 0; left: 0; width: 100%;
+    font-family: 'Inter', system-ui, sans-serif; color: #17212b;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+
+  .print-letterhead { display: flex; align-items: center; gap: 16px; border-bottom: 3px solid #21508a; padding-bottom: 10px; margin-bottom: 10px; }
+  .print-logo { width: 58px; height: 58px; object-fit: contain; flex-shrink: 0; }
+  .print-company h1 { font-family: 'Oswald', sans-serif; font-size: 15px; margin: 0 0 3px; color: #21508a; letter-spacing: 0.02em; }
+  .print-company p { font-size: 10px; margin: 0; color: #444; }
+
+  .print-title-bar { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 14px; }
+  .print-title-bar h2 { font-family: 'Oswald', sans-serif; font-size: 16px; margin: 0; display: inline; color: #17212b; }
+  .print-month { font-size: 11.5px; color: #21508a; font-weight: 700; margin-left: 8px; }
+  .print-generated { font-size: 9.5px; color: #777; }
+
+  .print-summary-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
+  .print-summary-card { border: 1px solid #d5dbe2; border-radius: 10px; padding: 10px 12px; page-break-inside: avoid; background: #fafbfc; }
+  .print-summary-head { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; font-weight: 700; margin-bottom: 6px; }
+  .print-summary-body { display: flex; align-items: center; gap: 12px; }
+  .print-summary-figures { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; flex: 1; }
+  .print-summary-figures div { display: flex; justify-content: space-between; gap: 10px; }
+  .print-summary-figures span { color: #667; }
+  .print-summary-figures b { color: #17212b; }
+
+  .print-section-title { font-family: 'Oswald', sans-serif; font-size: 13px; color: #21508a; margin: 16px 0 6px; border-bottom: 1px solid #d5dbe2; padding-bottom: 4px; }
+  .print-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; page-break-inside: auto; }
+  .print-table th { background: #21508a; color: #fff; border: 1px solid #21508a; padding: 5px 7px; font-size: 9.5px; text-align: left; }
+  .print-table td { border: 1px solid #d5dbe2; padding: 4px 7px; font-size: 9.5px; text-align: left; }
+  .print-table tbody tr:nth-child(even) { background: #f2f5f9; }
+  .print-table tr { page-break-inside: avoid; }
+  .print-incentive { color: #1f7a46; font-weight: 700; }
+
+  .print-chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 8.5px; font-weight: 700; white-space: nowrap; }
+  .print-chip-good { background: #dff5e6; color: #1f7a46; border: 1px solid #79c79b; }
+  .print-chip-warn { background: #fdf1d9; color: #a96b12; border: 1px solid #e0ab55; }
+  .print-chip-bad { background: #fbe1da; color: #a3341a; border: 1px solid #dd8265; }
+  .print-chip-muted { background: #eceef0; color: #667; border: 1px solid #ccc; }
+
+  .print-footer { font-size: 9px; color: #888; margin-top: 18px; border-top: 1px solid #d5dbe2; padding-top: 8px; }
 }
 
 .incentive-kpi-block { border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
